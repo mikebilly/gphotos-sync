@@ -15,7 +15,19 @@ log = logging.getLogger(__name__)
 authorization_base_url = "https://accounts.google.com/o/oauth2/v2/auth"
 token_uri = "https://www.googleapis.com/oauth2/v4/token"
 
+##
+from oauth2client.client import flow_from_clientsecrets
+from oauth2client import tools
+from oauth2client.file import Storage
 
+import json
+class SetEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, set):
+            return list(obj)
+        return json.JSONEncoder.default(self, obj)
+
+##
 class Authorize:
     def __init__(
         self,
@@ -72,7 +84,7 @@ class Authorize:
 
     def save_token(self, token: str):
         with self.token_file.open("w") as stream:
-            dump(token, stream)
+          dump(token, stream, cls=SetEncoder)
         self.token_file.chmod(0o600)
 
     def authorize(self):
@@ -88,27 +100,24 @@ class Authorize:
                 token_updater=self.save_token,
             )
         else:
-            flow = InstalledAppFlow.from_client_secrets_file(
-                self.secrets_file, scopes=self.scope
-            )
-            # localhost and bind to 0.0.0.0 always works even in a container.
-            flow.run_local_server(
-                open_browser=False, bind_addr="0.0.0.0", port=self.port
-            )
-
-            self.session = flow.authorized_session()
-
+            storage = Storage("/content/gphotos-sync-credentials.json")
+            credentials = storage.get()
+            if credentials is None or credentials.invalid:
+              flow = flow_from_clientsecrets(self.secrets_file, self.scope)
+              flags = tools.argparser.parse_args(args=['--noauth_local_webserver'])
+              credentials = tools.run_flow(flow, storage, flags)
+			  
             # Mapping for backward compatibility
             oauth2_token = {
-                "access_token": flow.credentials.token,
-                "refresh_token": flow.credentials.refresh_token,
+                "access_token": credentials.access_token,
+                "refresh_token": credentials.refresh_token,
                 "token_type": "Bearer",
-                "scope": flow.credentials.scopes,
-                "expires_at": flow.credentials.expiry.timestamp(),
+                "scope": credentials.scopes,
+                "expires_at": credentials.token_expiry.timestamp(),
             }
 
             self.save_token(oauth2_token)
-
+            
         # set up the retry behaviour for the authorized session
         retries = Retry(
             total=self.max_retries,
